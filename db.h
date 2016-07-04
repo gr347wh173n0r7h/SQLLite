@@ -3,12 +3,16 @@ db.h - This file contains all the structures, defines, and function
 	prototype for the db.exe program.
 *********************************************************************/
 
-#define MAX_IDENT_LEN   16
+#define MAX_IDENT_LEN   	16
 #define MAX_NUM_COL			16
 #define MAX_TOK_LEN			32
-#define KEYWORD_OFFSET	10
+#define KEYWORD_OFFSET		10
 #define STRING_BREAK		" (),<>="
 #define NUMBER_BREAK		" ),"
+
+#define TIMESTAMP_LEN	 	14
+#define LOG_F				"db.log"
+#define DB_F 				"dbfile.bin"
 
 /* Column descriptor sturcture = 20+4+4+4+4 = 36 bytes */
 typedef struct cd_entry_def
@@ -94,33 +98,38 @@ typedef enum t_value
 	K_DROP,				// 16
 	K_LIST,				// 17
 	K_SCHEMA,			// 18
-  	K_FOR,        // 19
+	K_FOR,        // 19
 	K_TO,				  // 20
-	  K_INSERT,     // 21
-	  K_INTO,       // 22
-	  K_VALUES,     // 23
-	  K_DELETE,     // 24
-	  K_FROM,       // 25
-	  K_WHERE,      // 26
-	  K_UPDATE,     // 27
-	  K_SET,        // 28
-	  K_SELECT,     // 29
-	  K_ORDER,      // 30
-	  K_BY,         // 31
-	  K_DESC,       // 32
-	  K_IS,         // 33
-	  K_AND,        // 34
-	  K_OR,         // 35 - new keyword should be added below this line
-	  F_SUM,        // 36
-	  F_AVG,        // 37
+	K_INSERT,     // 21
+	K_INTO,       // 22
+	K_VALUES,     // 23
+	K_DELETE,     // 24
+	K_FROM,       // 25
+	K_WHERE,      // 26
+	K_UPDATE,     // 27
+	K_SET,        // 28
+	K_SELECT,     // 29
+	K_ORDER,      // 30
+	K_BY,         // 31
+	K_DESC,       // 32
+	K_IS,         // 33
+	K_AND,        // 34
+	K_OR,         // 35 - new keyword should be added below this line
+	K_BACKUP,
+	K_RESTORE,
+	K_WITHOUT,
+	K_RF,
+	K_ROLLFORWARD,
+	F_SUM,        // 36
+	F_AVG,        // 37
 	F_COUNT,      // 38 - new function name should be added below this line
 	S_LEFT_PAREN = 70,  // 70
 	S_RIGHT_PAREN,		  // 71
 	S_COMMA,			      // 72
-	  S_STAR,             // 73
-	  S_EQUAL,            // 74
-	  S_LESS,             // 75
-	  S_GREATER,          // 76
+	S_STAR,             // 73
+	S_EQUAL,            // 74
+	S_LESS,             // 75
+	S_GREATER,          // 76
 	IDENT = 85,			    // 85
 	INT_LITERAL = 90,	  // 90
  	STRING_LITERAL,     // 91
@@ -129,7 +138,7 @@ typedef enum t_value
 } token_value;
 
 /* This constants must be updated when add new keywords */
-#define TOTAL_KEYWORDS_PLUS_TYPE_NAMES 29
+#define TOTAL_KEYWORDS_PLUS_TYPE_NAMES 34
 
 /* New keyword must be added in the same position/order as the enum
    definition above, otherwise the lookup will be wrong */
@@ -138,6 +147,7 @@ char *keyword_table[] =
   "int", "char", "create", "table", "not", "null", "drop", "list", "schema",
   "for", "to", "insert", "into", "values", "delete", "from", "where", 
   "update", "set", "select", "order", "by", "desc", "is", "and", "or",
+  "backup", "restore", "without", "rf", "rollforward",
   "sum", "avg", "count"
 };
 
@@ -149,10 +159,13 @@ typedef enum s_statement
 	DROP_TABLE,								// 101
 	LIST_TABLE,								// 102
 	LIST_SCHEMA,							// 103
-  INSERT,                   // 104
-  DELETE,                   // 105
-  UPDATE,                   // 106
-  SELECT                    // 107
+	INSERT,                   // 104
+	DELETE,                   // 105
+	UPDATE,                   // 106
+	SELECT,                    // 107
+	BACKUP,
+	RESTORE,
+	ROLLFORWARD
 } semantic_statement;
 
 /* This enum has a list of all the errors that should be detected
@@ -176,13 +189,16 @@ typedef enum error_return_codes
 	FILE_OPEN_ERROR = -299,			// -299
 	DBFILE_CORRUPTION,					// -298
 	MEMORY_ERROR ,							  // -297
-	FILE_DELETE_ERROR 						// -296
+	FILE_DELETE_ERROR,									// -296
+	FILE_EXISTS_ERROR, 						
+	ROLLFORWARD_PENDING
 } return_codes;
 
 /* Set of function prototypes */
+int process(char *stmt, char r);
 int get_token(char *command, token_list **tok_list);
 void add_to_list(token_list **tok_list, char *tmp, int t_class, int t_value);
-int do_semantic(token_list *tok_list);
+int do_semantic(token_list *tok_list, char *stmt);
 int sem_create_table(token_list *t_list);
 int sem_drop_table(token_list *t_list);
 int sem_list_tables();
@@ -194,7 +210,16 @@ int sem_custom_stmt(token_list *t_list);
 int sem_delete_stmt(token_list *t_list);
 int sem_update_stmt(token_list *t_list);
 
+int create_log_file();
+int write_to_log_file(char* stmt, int cmd);
+char *save_log_file();
+int sem_backup_db(token_list *t_list);
+int sem_restore_db(token_list *t_list);
+int sem_rollforward_db(token_list *t_list);
+int toggle_rollforward_flag();
+
 int write_to_table_file(table_file_header *ntable, char *tablename);
+table_file_header *read_from_table_file(char *table);
 int initialize_table_list(char *tablename, int rec_size);
 int delete_table_file(char * tablename);
 

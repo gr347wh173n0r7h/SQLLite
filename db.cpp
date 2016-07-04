@@ -10,11 +10,11 @@
 #include <ctype.h>
 #include <sys/stat.h>
 #include <sys/types.h>
+#include <time.h>
 
 int main(int argc, char** argv)
 {
-	int rc = 0;
-	token_list *tok_list=NULL, *tok_ptr=NULL, *tmp_tok_ptr=NULL;
+	int rc;
 
 	if ((argc != 2) || (strlen(argv[1]) == 0))
 	{
@@ -22,15 +22,24 @@ int main(int argc, char** argv)
 		return 1;
 	}
 
-	rc = initialize_tpd_list();
+	rc = process(argv[1], 'M');
+	return rc;
+}
 
-    if (rc)
- 	{
+int process(char *stmt, char r){
+	int rc = 0;
+	token_list *tok_list=NULL, *tok_ptr=NULL, *tmp_tok_ptr=NULL;
+
+		
+	if((rc = create_log_file()) != 0){
+		printf("\nError creating LOG file\nrc = %d\n", rc);
+	}
+    else if ((rc = initialize_tpd_list()) != 0){
 		printf("\nError in initialize_tpd_list().\nrc = %d\n", rc);
     }
 	else
 	{
-    	rc = get_token(argv[1], &tok_list);
+    	rc = get_token(stmt, &tok_list);
 
 		/* Test code */
 		tok_ptr = tok_list;
@@ -43,22 +52,24 @@ int main(int argc, char** argv)
     
 		if (!rc)
 		{
-			rc = do_semantic(tok_list);
+			rc = do_semantic(tok_list, stmt);
 		}
 
 		if (rc)
 		{
 			tok_ptr = tok_list;
-			while (tok_ptr != NULL)
-			{
-				if ((tok_ptr->tok_class == error) ||
-					  (tok_ptr->tok_value == INVALID))
+			if(r != 'R'){
+				while (tok_ptr != NULL)
 				{
-					printf("\nError in the string: %s\n", tok_ptr->tok_string);
-					printf("rc=%d\n", rc);
-					break;
+					if ((tok_ptr->tok_class == error) ||
+						  (tok_ptr->tok_value == INVALID))
+					{
+						printf("\nError in the string: %s\n", tok_ptr->tok_string);
+						printf("rc=%d\n", rc);
+						break;
+					}
+					tok_ptr = tok_ptr->next;
 				}
-				tok_ptr = tok_ptr->next;
 			}
 		}
 
@@ -90,7 +101,7 @@ int get_token(char* command, token_list** tok_list)
 		bool found_keyword = false;
 
 		/* This is the TOP Level for each token */
-	  memset ((void*)temp_string, '\0', MAX_TOK_LEN);
+	    memset ((void*)temp_string, '\0', MAX_TOK_LEN);
 		i = 0;
 
 		/* Get rid of all the leading blanks */
@@ -133,11 +144,11 @@ int get_token(char* command, token_list** tok_list)
 
 				if (found_keyword)
 				{
-				  if (KEYWORD_OFFSET+j < K_CREATE)
+				  	if (KEYWORD_OFFSET+j < K_CREATE)
 						t_class = type_name;
 					else if (KEYWORD_OFFSET+j >= F_SUM)
-            t_class = function_name;
-          else
+            			t_class = function_name;
+         			 else
 					  t_class = keyword;
 
 					add_to_list(tok_list, temp_string, t_class, KEYWORD_OFFSET+j);
@@ -294,21 +305,34 @@ void add_to_list(token_list **tok_list, char *tmp, int t_class, int t_value)
 	return;
 }
 
-int do_semantic(token_list *tok_list)
+int do_semantic(token_list *tok_list, char *stmt)
 {
 	int rc = 0, cur_cmd = INVALID_STATEMENT;
 	bool unique = false;
+	bool log_flag = false;
   	token_list *cur = tok_list;
 
-	if ((cur->tok_value == K_CREATE) && ((cur->next != NULL) && (cur->next->tok_value == K_TABLE))){
+  	if(g_tpd_list->db_flags != 0){
+		if (cur->tok_value != K_ROLLFORWARD){
+			printf("ROLLFORWARD is pending!\n");
+			rc = ROLLFORWARD_PENDING;
+		} else {
+			printf("ROLLFORWARD statement\n");
+			cur_cmd = ROLLFORWARD;
+			cur = cur->next;
+		}
+	}
+	else if ((cur->tok_value == K_CREATE) && ((cur->next != NULL) && (cur->next->tok_value == K_TABLE))){
 		printf("CREATE TABLE statement\n");
 		cur_cmd = CREATE_TABLE;
 		cur = cur->next->next;
+		log_flag = true;
 	}
 	else if ((cur->tok_value == K_DROP) && ((cur->next != NULL) && (cur->next->tok_value == K_TABLE))){
 		printf("DROP TABLE statement\n");
 		cur_cmd = DROP_TABLE;
 		cur = cur->next->next;
+		log_flag = true;
 	}
 	else if ((cur->tok_value == K_LIST) && ((cur->next != NULL) && (cur->next->tok_value == K_TABLE))){
 		printf("LIST TABLE statement\n");
@@ -333,18 +357,30 @@ int do_semantic(token_list *tok_list)
 		printf("INSERT INTO statement\n");
 		cur_cmd = INSERT;
 		cur = cur->next->next;
+		log_flag = true;
 	}
 	else if ((cur->tok_value == K_DELETE) && ((cur->next != NULL) && (cur->next->tok_value == K_FROM))){
 		printf("DELETE FROM statement\n");
 		cur_cmd = DELETE;
 		cur = cur->next->next;
+		log_flag = true;
 	}
 	else if ((cur->tok_value == K_UPDATE) && ((cur->next != NULL) && (cur->next->next->tok_value == K_SET))){
 		printf("UPDATE TABLE statement\n");
 		cur_cmd = UPDATE;
 		cur = cur->next;
+		log_flag = true;
 	}
-	else{
+	else if((cur->tok_value == K_BACKUP) && ((cur->next != NULL) && (cur->next->tok_value == K_TO))){
+		printf("BACKUP statement\n");
+		cur_cmd = BACKUP;
+	}
+	else if((cur->tok_value == K_RESTORE) && ((cur->next != NULL) && (cur->next->tok_value == K_FROM))){
+		printf("RESTORE statement\n");
+		cur_cmd = RESTORE;
+		cur = cur->next;
+	}
+	 else {
 		printf("Invalid statement\n");
 		rc = cur_cmd;
 	}
@@ -391,12 +427,33 @@ int do_semantic(token_list *tok_list)
 			case UPDATE:
 						// printf("%16s\n",cur->tok_string);
 						rc = sem_update_stmt(cur);
+						break;	
+			case BACKUP:
+						// printf("%16s\n",cur->tok_string);
+						rc = sem_backup_db(cur);
+						break;	
+			case RESTORE:
+						// printf("%16s\n",cur->tok_string);
+						rc = sem_restore_db(cur);
+						// rc =toggle_rollforward_flag();
+						break;	
+			case ROLLFORWARD:
+						// printf("%16s\n", "RollForward");
+						rc = toggle_rollforward_flag();
+						rc = sem_rollforward_db(cur);
+						if(rc != 0){
+							// reset flag if rollforward error
+							rc = toggle_rollforward_flag();
+						}
 						break;							
 			default:
 					; /* no action */
 		}
+
+		if(!rc && log_flag){
+			rc = write_to_log_file(stmt, cur_cmd);	
+		}
 	}
-	
 	return rc;
 }
 // ---------------------------------------------------------------------------------------------
@@ -876,9 +933,603 @@ int sem_list_schema(token_list *t_list)
 
   return rc;
 }
+// LOG ____________________________________________________________________________
 
+char *timestamp(){
+	time_t t;
+	struct tm *time_s;
+	char *times;
+	times = new char[15];
+	
+	time(&t);
+	time_s = localtime(&t);
+	strftime(times, 15, "%Y%m%d%H%M%S", time_s);
+	// printf("%s\n", times);
+	return times;
+}
 
+int create_log_file(){
+	int rc = 0;
+	FILE *fhandle = NULL;
 
+	if ((fhandle = fopen(LOG_F, "a")) == NULL){
+		rc = FILE_OPEN_ERROR;
+	}
+	
+	if (!rc){
+		fclose(fhandle);
+	}
+	
+	return rc;
+}
+
+int write_to_log_file(char* stmt, int cmd){
+	int rc = 0;
+	FILE *fhandle = NULL;
+	char *new_log = NULL, *logs;
+
+	if((fhandle = fopen(LOG_F, "a")) == NULL){
+		rc = FILE_OPEN_ERROR;
+	}
+	if(!rc)
+	{	
+		if(cmd == BACKUP){
+			logs = (char*)calloc(1, (strlen(stmt) + 1) * sizeof(char));
+			memset(logs, 0, (strlen(stmt) + 1) * sizeof(char));
+			strcpy(logs, stmt);
+			strcat(logs, "\n");
+		} else {
+			logs = (char*)calloc(1, (strlen(stmt) + 19) * sizeof(char));
+			memset(logs, 0, (strlen(stmt) + 19) * sizeof(char));
+
+			strcpy(logs, timestamp());
+			strcat(logs, " \"");
+			strcat(logs, stmt);
+			strcat(logs, "\"\n");
+		}
+
+		fputs(logs, fhandle);
+		fclose(fhandle);
+	}
+
+	return rc;
+}
+
+char *save_log_file(){
+	FILE *fhandle = NULL;
+	char fname[MAX_IDENT_LEN], temp_file[MAX_IDENT_LEN];
+	bool done = false;
+
+	int i = 1;
+	while(!done){
+		memset(fname, '\0', MAX_IDENT_LEN);
+		strcpy(fname, LOG_F);
+		itoa(i, temp_file, 10);
+		strcat(fname, temp_file);
+
+		if((fhandle = fopen(fname, "r")) == NULL){
+			rename(LOG_F, fname);
+			done = true;
+			// fflush(fhandle);
+			// fclose(fhandle);
+		}
+		i++;
+	}
+	return fname;
+}
+// BACKUP
+int sem_backup_db(token_list *t_list){
+	int rc = 0;
+	char *stmt, *filename;
+
+	FILE *fhandle = NULL;
+
+	token_list *img = NULL, *head = NULL;
+
+	tpd_entry *cur = &(g_tpd_list->tpd_start);
+	int num_tables = g_tpd_list->num_tables;
+
+	table_file_header *table;
+	
+
+	head = t_list;
+	img = t_list->next->next;
+
+	stmt = (char*)calloc(1, (strlen(img->tok_string) + 12) * sizeof(char));
+	filename = (char*)calloc(1, (strlen(img->tok_string) + 4) * sizeof(char));
+	
+	strcpy(filename, img->tok_string);
+	strcat(filename, ".img\0");
+
+	strcpy(stmt, "BACKUP ");
+	strcat(stmt, filename);
+
+	// printf("%s\n", stmt);
+	// printf("%s\n", filename);
+
+	if(head->tok_value != K_BACKUP && head->next->tok_value != K_TO && head->next->tok_value != IDENT){
+		printf("%s\n", "Error in Backup statement");
+		rc = INVALID_TYPE_NAME;
+	} else {
+
+		if ((fhandle = fopen(filename, "r")) != NULL){
+			printf("Image File Already Exists\n");
+			rc = FILE_EXISTS_ERROR;
+		}
+		else if ((fhandle = fopen(filename, "wbc")) == NULL){
+			rc = FILE_OPEN_ERROR;
+		}
+		if(!rc){
+			printf("%d\n",g_tpd_list->list_size);
+			fwrite(&(g_tpd_list->list_size), sizeof(int), 1, fhandle);
+			fwrite(g_tpd_list, g_tpd_list->list_size, 1, fhandle);
+
+			int i = 0;
+			while (i < num_tables && !rc){
+				table = read_from_table_file(cur->table_name);
+				if (!table){
+					printf("Error");
+					// fclose(fhandle);
+					rc = FILE_OPEN_ERROR;
+					break;
+				} else {
+					fwrite(&(table->file_size), sizeof(int), 1, fhandle);
+					fwrite(table, table->file_size, 1, fhandle);
+					cur = (tpd_entry*)((char*)cur + cur->tpd_size);
+				}
+				i++;
+			}
+			
+		}
+		fclose(fhandle);
+	}
+
+	if(!rc){
+		printf("\n%d Tables backed up.\n", num_tables);
+		rc = write_to_log_file(stmt, BACKUP);
+	}
+
+	return rc;
+}
+// RESTORE
+int sem_restore_db(token_list *t_list){
+	FILE *img_f = NULL, *db_f = NULL, *oldlog_F = NULL,*newlog_F = NULL;
+	int rc = 0, i;
+	token_list *cur = NULL, *img = NULL;
+	tpd_entry *tab_entry = NULL;
+	table_file_header *table = NULL;
+	bool rf_flag = false;
+	char *img_filename, *db_filename, *log_filename;
+
+	cur = t_list;
+
+	if(cur->tok_value != K_FROM){
+		rc = INVALID_STATEMENT;
+		cur->tok_value = INVALID;
+	} else {
+		cur = cur->next;
+		if(cur->tok_value != IDENT){
+			rc = INVALID_STATEMENT;
+			cur->tok_value = INVALID;
+		} else {
+			img = cur;
+			cur = cur->next;
+			if(cur->tok_value == K_WITHOUT){
+				cur = cur->next;
+				if(cur->tok_value == K_RF){
+					rf_flag = true;
+				} else {
+					rc = INVALID_STATEMENT;
+					cur->tok_value = INVALID;
+				}
+			} else if(cur->tok_value != EOC){
+				rc = INVALID_STATEMENT;
+				cur->tok_value = INVALID;
+			}
+		}
+	}
+
+	// RESTORE
+	if(!rc){
+		int size = 0;
+		img_filename = new char[strlen(img->tok_string) + 5];
+		strcpy(img_filename, img->tok_string);
+		strcat(img_filename, ".img\0");
+		// printf("%s\n", img_filename);
+
+		if((img_f = fopen(img_filename, "rbc")) == NULL){
+			printf("\nError in Image file\n");
+			rc = FILE_OPEN_ERROR;
+		} else {	
+			fread(&size, sizeof(int), 1, img_f);
+
+			g_tpd_list = NULL;
+			g_tpd_list = (tpd_list*)calloc(1,size);
+			memset(g_tpd_list, '\0', size);
+			fread(g_tpd_list, size, 1, img_f);
+			// remove(DB_F);
+
+			if((db_f = fopen(DB_F, "wbc")) == NULL){
+				printf("\nError in DB file\n");
+				rc = FILE_OPEN_ERROR;
+				fclose(db_f);
+			} else {
+				fwrite(g_tpd_list, size, 1, db_f);
+				fclose(db_f);
+				// rc = initialize_tpd_list();
+			}	
+
+			
+			if(!rc){
+				int num_tables = g_tpd_list->num_tables;
+
+				for(i = 0, tab_entry = &(g_tpd_list->tpd_start); i < num_tables; 
+						i++, tab_entry = (tpd_entry*)((char*)tab_entry + tab_entry->tpd_size)){
+
+					db_filename = new char[strlen(tab_entry->table_name) + 5];
+					strcpy(db_filename, tab_entry->table_name);
+					strcat(db_filename, ".tab\0");
+					// printf("%s\n", db_filename);
+
+					size = 0;
+					fread(&size, sizeof(int), 1, img_f);
+					table = (table_file_header*)calloc(1,size);
+					memset(table, '\0', size);
+					fread(table, size, 1, img_f);
+					// table->file_size = size;
+
+					// if(FILE *fp = fopen(db_filename, "wbc")){
+					// 	fclose(fp);
+					// }
+					// fclose(fp);
+					rc = write_to_table_file(table, db_filename);
+					// printf("Here\n");
+					// fclose(img_f);
+					free(table);
+				}
+				// printf("Here\n");
+				if(!rf_flag){
+					// Toggle flag
+					rc = toggle_rollforward_flag();
+
+					// Add rf start to log after img backup
+					char oldname[] = "old.log\0";
+
+					if(!rc){
+						rename(LOG_F, oldname);
+
+						if((oldlog_F = fopen(oldname, "r")) == NULL){
+							printf("\nError in Log file\n");
+							rc = FILE_OPEN_ERROR;
+						} else {
+							if((newlog_F = fopen(LOG_F, "w")) == NULL){
+								printf("\nError in Log file\n");
+								rc = FILE_OPEN_ERROR;
+							} else {
+
+								char log_buff[2400];
+								char *tag, *log_to_find;
+								tag = new char[8 + strlen(img_filename)];
+								log_to_find = new char [8 + strlen(img_filename)];
+
+								memcpy(log_to_find, "BACKUP ", 7);
+								strcat(log_to_find, img_filename);
+								strcat(log_to_find, "\n");
+								int log_size = strlen(log_to_find) + 1;
+
+								while(fgets(log_buff,2400, oldlog_F) != NULL){
+									
+									memcpy(tag, &log_buff, log_size);
+									// strcat(tag, "\0");
+
+									fwrite(log_buff, strlen(log_buff), 1, newlog_F);
+
+									if(strcmp(tag, log_to_find) == 0){
+										// printf("%s\n", "Found");
+										fwrite("RF_START\n", 9, 1, newlog_F);
+									}		
+								}
+								fclose(newlog_F);
+								fclose(oldlog_F);
+								remove(oldname);
+							}
+						}
+					}
+					printf("Restored %s\n", img_filename);
+
+				} else {
+					// Save old log
+					char *old_log;
+					old_log = new char[MAX_IDENT_LEN];
+					strcpy(old_log, save_log_file());
+					// printf("%s\n",old_log );
+
+					// Prune logs file
+					bool done = false;
+					if((oldlog_F = fopen(old_log, "r")) == NULL){
+							printf("\nError in Old Log file\n");
+							rc = FILE_OPEN_ERROR;
+						} else {
+							if((newlog_F = fopen(LOG_F, "w")) == NULL){
+								printf("\nError in new Log file\n");
+								rc = FILE_OPEN_ERROR;
+							} else {
+								char log_buff[2400];
+								char *tag, *log_to_find;
+								tag = new char[8 + strlen(img_filename)];
+								log_to_find = new char [8 + strlen(img_filename)];
+
+								memcpy(log_to_find, "BACKUP ", 7);
+								strcat(log_to_find, img_filename);
+								strcat(log_to_find, "\n");
+								int log_size = strlen(log_to_find) + 1;
+
+								while(fgets(log_buff,2400, oldlog_F) != NULL && !done){
+									
+									memcpy(tag, &log_buff, log_size);
+									// strcat(tag, "\0");
+
+									fwrite(log_buff, strlen(log_buff), 1, newlog_F);
+
+									if(strcmp(tag, log_to_find) == 0){
+										// printf("%s\n", "Found");
+										done = true;
+									}		
+								}
+								fclose(newlog_F);
+								fclose(oldlog_F);
+							}
+						}
+					
+					printf("%s\n", "Restore Without RollForward");
+
+				}
+			}
+		}
+	}
+
+	return rc;
+}
+
+int sem_rollforward_db(token_list *t_list){
+	FILE *file, *oldlog_F, *newlog_F;
+	int rc = 0;
+	token_list *cur = NULL, *log_cur = NULL;
+	cur = t_list;
+	bool rf_flag = false, rf_start_flag = false;
+
+	// printf("%s\n", cur->tok_string);
+
+	// SEARCH through log for RF_START
+
+	if((file = fopen(LOG_F, "r")) == NULL){
+		printf("\nError in Log file\n");
+		rc = FILE_OPEN_ERROR;
+	} else {
+		char log_buff[2400];
+		char *tag, *log_to_find;
+
+		tag = new char[9];
+		log_to_find = new char [9];
+
+		memcpy(log_to_find, "RF_START\n", 9);
+		// strcat(log_to_find, "\n");
+		int log_size = strlen(log_to_find);
+		// printf(log_to_find);
+
+		while(fgets(log_buff,2400, file) != NULL && !rf_flag){
+			memcpy(tag, &log_buff, log_size);
+			// printf("-%s\n", tag);
+			if(strcmp(tag, log_to_find) == 0){
+				// printf("%s\n", "FOund");
+				rf_flag = true;
+			}		
+		}
+		fclose(file);
+	}
+
+	// ROLLFORWARD
+	if(rf_flag){
+		// ALL
+		if(cur->tok_value == EOC){
+
+			printf("\n%s\n%s\n", "Roll All", "Rollforward Transactions:");
+
+			char *old_log;
+			old_log = new char[MAX_IDENT_LEN + 15];
+			strcpy(old_log, save_log_file());
+			// printf("%s\n",old_log );
+
+			// Prune logs file
+			if((oldlog_F = fopen(old_log, "r")) == NULL){
+					printf("\nError in Old Log file\n");
+					rc = FILE_OPEN_ERROR;
+			} else {
+				if((newlog_F = fopen(LOG_F, "a")) == NULL){
+					printf("\nError in new Log file\n");
+					rc = FILE_OPEN_ERROR;
+				} else {
+
+					char log_buff[2400];
+					char *tag, *log_to_find, *log_rfs;
+
+					tag = new char[9];
+					log_rfs = new char [9];
+
+					memcpy(log_rfs, "RF_START\n", 9);
+					// strcat(log_rfs, "\n");
+					int log_size = strlen(log_rfs);
+
+					// Add logs before image to new logs file and remove RF_START, THEN
+					while(fgets(log_buff,2400, oldlog_F) != NULL){
+						if(!rf_start_flag){
+							memcpy(tag, &log_buff, log_size);
+
+							if(strcmp(tag, log_rfs) == 0){
+								rf_start_flag = true;
+								fclose(newlog_F);
+							}
+							else{
+								fputs(log_buff, newlog_F);
+							}
+
+						} else {
+							old_log = new char[strlen(log_buff) - 16];
+							memcpy(old_log, (void*)((char*)log_buff + 16), strlen(log_buff) - 17);
+							old_log[strlen(log_buff) - 18] = '\0';
+							printf("\nLog query: %s\n",old_log);
+
+							// strcat(old_log,"\0");
+							// printf("BeforeHere\n");
+							if(strcmp(old_log, "") != 0){
+								rc = process(old_log, 'R');
+							}
+							
+						}
+					}
+					fclose(newlog_F);
+					fflush(oldlog_F);
+					fclose(oldlog_F);
+
+					if(!rc){
+						printf("Rollback Successful\n" );
+					}
+
+				}
+			}
+		// ROLL TO TIME STAMP ------------------------------------------------------------
+		} else if(cur->tok_value == K_TO) {
+
+			cur = cur->next; //Timestamp
+
+			char *times_s;
+			times_s = new char[15];
+
+			memcpy(times_s, &cur->tok_string, 14);
+			times_s[14] = '\0';
+
+			// printf("%s\n", "RollTS");
+			// printf("%s\n", times);
+
+			// ------------------------------------------------------------
+			char *old_log;
+			old_log = new char[MAX_IDENT_LEN + 15];
+			strcpy(old_log, save_log_file());
+			// printf("%s\n",old_log );
+
+			// Prune logs file
+			if((oldlog_F = fopen(old_log, "r")) == NULL){
+					printf("\nError in Old Log file\n");
+					rc = FILE_OPEN_ERROR;
+			} else {
+
+				if((newlog_F = fopen(LOG_F, "a")) == NULL){
+					printf("\nError in new Log file\n");
+					rc = FILE_OPEN_ERROR;
+				} else {
+
+					char log_buff[2400];
+					char *tag, *log_to_find, *log_rfs, *time_stamp;
+
+					tag = new char[9];
+					log_rfs = new char [9];
+					time_stamp = new char [15];
+
+					memcpy(log_rfs, "RF_START\n", 9);
+					// strcat(log_rfs, "\n");
+					int log_size = strlen(log_rfs);
+					bool time_done = false;
+
+					// Add logs before image to new logs file and remove RF_START, THEN
+					while(fgets(log_buff,2400, oldlog_F) != NULL){
+						// printf("-%s\n", log_buff);
+						
+						if(!rf_start_flag){
+							memcpy(tag, &log_buff, log_size);
+
+							if(strcmp(tag, log_rfs) == 0){
+								rf_start_flag = true;
+								fclose(newlog_F);
+							} else {
+								fputs(log_buff, newlog_F);
+							}
+
+						} else {
+
+								memcpy(time_stamp, (void*)((char*)log_buff), 14);
+								// memcpy((void*)((char*)time_stamp + 14), "\0", 1);
+
+								old_log = new char[strlen(log_buff) - 16];
+								memcpy(old_log, (void*)((char*)log_buff + 16), strlen(log_buff) - 17);
+								old_log[strlen(log_buff) - 18] = '\0';
+								// memcpy((void*)((char*)old_log + strlen(old_log) - 2), "\0", 1);
+								
+								
+								// // strcat(old_log,"\0");
+
+								time_stamp[14] = '\0';
+								times_s[14] = '\0';
+
+								// printf("TS-%s\n", time_stamp);
+								// printf("T -%s\n",times_s);
+
+								if(strcmp(time_stamp,times_s) < 0){
+									printf("\nLog query: %s\n",old_log);
+									rc = process(old_log, 'R');
+								}
+
+						}	
+						
+					}
+					fclose(newlog_F);
+					fflush(oldlog_F);
+					fclose(oldlog_F);
+
+					if(!rc){
+						printf("\nRollback Successful\n" );
+					}
+
+				}
+			}
+		// END ROLL TO TIME STAMP ------------------------------------------------------------
+		} else {
+			rc = INVALID_STATEMENT;
+			cur->tok_value = INVALID;
+		}
+	} else {
+		printf("\nNO RF_START in LOG\n");
+		rc = INVALID_STATEMENT;
+	}
+
+	return rc;
+}
+
+int toggle_rollforward_flag(){
+	FILE *file = NULL;
+	struct _stat file_stat;
+	int rc = 0;
+
+	if (g_tpd_list->db_flags == 0){
+		g_tpd_list->db_flags = ROLLFORWARD_PENDING;
+	} else {
+		g_tpd_list->db_flags = 0;
+	}
+	if ((file = fopen("dbfile.bin", "wbc")) == NULL){
+		printf("\nError Opening DB File\n");
+		rc = FILE_OPEN_ERROR;
+	} else {
+		// _fstat(_fileno(file), &file_stat);
+		// printf("dbfile.bin size = %d\n", file_stat.st_size);
+		fwrite(g_tpd_list, g_tpd_list->list_size , 1, file);
+		// fwrite(g_tpd_list, sizeof(tpd_list), 1, f);
+		fflush(file);
+		fclose(file);
+	}
+
+	return rc;
+}
+
+// SQL STMTS ______________________________________________________________________
 int sem_insert_stmt(token_list *t_list){
 	int rc = 0;
 	int i = 0;
@@ -1883,7 +2534,7 @@ int sem_select_stmt(token_list *t_list){
 									printf("\n");
 
 									for(int entry_num = 0; entry_num < table->num_records; entry_num++){
-										int pointer = table->record_offset + table->record_size * entry_num + sel_col_offset;
+										int pointer = table->record_offset + table->record_size * entry_num;
 
 										if(v_row[entry_num] == 1){
 											printf("|");
@@ -2040,7 +2691,7 @@ int sem_delete_stmt(token_list *t_list){
 					fread(table, file_stat.st_size, 1, fhandle);
 					fflush(fhandle);
 					fclose(fhandle);
-					printf("S:%d / N:%d / L:%d / O:%d\n\n", table->file_size, table->num_records, table->record_size, table->record_offset );
+					// printf("S:%d / N:%d / L:%d / O:%d\n\n", table->file_size, table->num_records, table->record_size, table->record_offset );
 					
 					if (table->file_size != file_stat.st_size){
 						printf("Size Error\n");
@@ -2519,8 +3170,9 @@ int write_to_table_file(table_file_header *ntable, char *tablename){
 	tfh = ntable;
 
 	size_t len = strlen(tablename);
-	char *fname = new char[len];
+	char *fname = new char[len + 1];
 	strcpy(fname, tablename);
+	fname[len] = '\0';
 
 	// printf("Table File: %s\t", fname);
 	// printf("File Size: %d\n", tfh->file_size);
@@ -2539,14 +3191,41 @@ int write_to_table_file(table_file_header *ntable, char *tablename){
 			rc = MEMORY_ERROR;
 		}
 		else
-		{
+		{	
+			// printf("Here w\n");
 			fwrite(tfh, tfh->file_size, 1, fhandle);
-			fflush(fhandle);
-			fclose(fhandle);
+			// printf("Here w\n");
+
 		}
+		fflush(fhandle);
+		fclose(fhandle);
+
+	}
+	// free(tfh);
+	return rc;
+}
+
+table_file_header *read_from_table_file(char *tablename){
+	FILE *fhandle = NULL;
+	struct _stat file_stat;
+	table_file_header *table = NULL;
+	char filename[MAX_IDENT_LEN + 4]; 
+
+	memset(filename, '\0', MAX_IDENT_LEN + 4);
+	strcat(filename, tablename);
+	strcat(filename, ".tab");
+
+	if ((fhandle = fopen(filename, "rbc")) == NULL){
+		printf("\nERROR in table file\n");
+	} else {
+		_fstat(_fileno(fhandle), &file_stat);
+		table = (table_file_header*)calloc(1, file_stat.st_size);
+		memset(table, '\0', file_stat.st_size);
+		fread(table, file_stat.st_size, 1, fhandle);
+		fclose(fhandle);
 	}
 
-	return rc;
+	return table;
 }
 
 int initialize_table_list(char *tablename, int rec_size){
