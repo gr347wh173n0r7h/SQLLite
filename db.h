@@ -29,7 +29,7 @@ typedef struct tpd_entry_def
 	char			table_name[MAX_IDENT_LEN+4];
 	int				num_columns;
 	int				cd_offset;
-	int       tpd_flags;
+	int       		tpd_flags;
 } tpd_entry;
 
 /* Table packed descriptor list = 4+4+4+36 = 48 bytes.  When no
@@ -41,8 +41,18 @@ typedef struct tpd_list_def
 	int				list_size;
 	int				num_tables;
 	int				db_flags;
-	tpd_entry	tpd_start;
+	tpd_entry		tpd_start;
 }tpd_list;
+
+typedef struct table_file_header_def
+{
+	int				file_size;			// 4 bytes
+	int				record_size;			// 4 bytes
+	int				num_records;			// 4 bytes
+	int				record_offset;			// 4 bytes
+	int				file_header_flag;		// 4 bytes
+	tpd_entry		*tpd_ptr;			// 4 bytes
+} table_file_header;					// minimum size = 24
 
 /* This token_list definition is used for breaking the command
    string into separate tokens in function get_tokens().  For
@@ -65,7 +75,7 @@ typedef enum t_class
 	symbol, 			// 3
 	type_name,		// 4
 	constant,		  // 5
-  function_name,// 6
+  	function_name,// 6
 	terminator,		// 7
 	error			    // 8
   
@@ -84,36 +94,36 @@ typedef enum t_value
 	K_DROP,				// 16
 	K_LIST,				// 17
 	K_SCHEMA,			// 18
-  K_FOR,        // 19
+  	K_FOR,        // 19
 	K_TO,				  // 20
-  K_INSERT,     // 21
-  K_INTO,       // 22
-  K_VALUES,     // 23
-  K_DELETE,     // 24
-  K_FROM,       // 25
-  K_WHERE,      // 26
-  K_UPDATE,     // 27
-  K_SET,        // 28
-  K_SELECT,     // 29
-  K_ORDER,      // 30
-  K_BY,         // 31
-  K_DESC,       // 32
-  K_IS,         // 33
-  K_AND,        // 34
-  K_OR,         // 35 - new keyword should be added below this line
-  F_SUM,        // 36
-  F_AVG,        // 37
+	  K_INSERT,     // 21
+	  K_INTO,       // 22
+	  K_VALUES,     // 23
+	  K_DELETE,     // 24
+	  K_FROM,       // 25
+	  K_WHERE,      // 26
+	  K_UPDATE,     // 27
+	  K_SET,        // 28
+	  K_SELECT,     // 29
+	  K_ORDER,      // 30
+	  K_BY,         // 31
+	  K_DESC,       // 32
+	  K_IS,         // 33
+	  K_AND,        // 34
+	  K_OR,         // 35 - new keyword should be added below this line
+	  F_SUM,        // 36
+	  F_AVG,        // 37
 	F_COUNT,      // 38 - new function name should be added below this line
 	S_LEFT_PAREN = 70,  // 70
 	S_RIGHT_PAREN,		  // 71
 	S_COMMA,			      // 72
-  S_STAR,             // 73
-  S_EQUAL,            // 74
-  S_LESS,             // 75
-  S_GREATER,          // 76
+	  S_STAR,             // 73
+	  S_EQUAL,            // 74
+	  S_LESS,             // 75
+	  S_GREATER,          // 76
 	IDENT = 85,			    // 85
 	INT_LITERAL = 90,	  // 90
-  STRING_LITERAL,     // 91
+ 	STRING_LITERAL,     // 91
 	EOC = 95,			      // 95
 	INVALID = 99		    // 99
 } token_value;
@@ -160,11 +170,13 @@ typedef enum error_return_codes
 	INVALID_TYPE_NAME,					// -391
 	INVALID_COLUMN_DEFINITION,	// -390
 	INVALID_COLUMN_LENGTH,			// -389
-  INVALID_REPORT_FILE_NAME,		// -388
+  	INVALID_REPORT_FILE_NAME,		// -388
+  	INVALID_NO_TABLE_CONTENT,		// -387
   /* Must add all the possible errors from I/U/D + SELECT here */
 	FILE_OPEN_ERROR = -299,			// -299
 	DBFILE_CORRUPTION,					// -298
-	MEMORY_ERROR							  // -297
+	MEMORY_ERROR ,							  // -297
+	FILE_DELETE_ERROR 						// -296
 } return_codes;
 
 /* Set of function prototypes */
@@ -175,6 +187,16 @@ int sem_create_table(token_list *t_list);
 int sem_drop_table(token_list *t_list);
 int sem_list_tables();
 int sem_list_schema(token_list *t_list);
+
+int sem_insert_stmt(token_list *t_list);
+int sem_select_stmt(token_list *t_list);
+int sem_custom_stmt(token_list *t_list);
+int sem_delete_stmt(token_list *t_list);
+int sem_update_stmt(token_list *t_list);
+
+int write_to_table_file(table_file_header *ntable, char *tablename);
+int initialize_table_list(char *tablename, int rec_size);
+int delete_table_file(char * tablename);
 
 /*
 	Keep a global list of tpd - in real life, this will be stored
